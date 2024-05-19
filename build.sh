@@ -1,1 +1,2 @@
-g++ main.cpp -o Freq -lncurses -pthread
+mkdir bin -p
+g++ main.cpp -o ./bin/Freq -lncurses -pthread
