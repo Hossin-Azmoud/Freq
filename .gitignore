@@ -1,0 +1,11 @@
+# Ignore audio files.
+*.mp3
+# binaries.
+/bin
+bin
+./bin
+# object files.
+/obj
+./obj
+*.o
+*.a
