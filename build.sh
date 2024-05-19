@@ -1,1 +1,1 @@
-g++ main.cpp -o Freq -lncurses
+g++ main.cpp -o Freq -lncurses -pthread
