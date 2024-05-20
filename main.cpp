@@ -93,6 +93,11 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
 	if (leftSamples > 0)
 	{
 		ma_decoder_read_pcm_frames(&audio->decoder, pOutput, samples_to_process , NULL);
+		float* pOutputF32 = (float*)pOutput;
+
+		for (ma_uint64 i = 0; i < samples_to_process * pDevice->playback.channels; ++i) 
+        	pOutputF32[i] *= player->volume;
+		// TODO: Copy the samples to be visualized.
 		audio->position += samples_to_process;
 	}
 
