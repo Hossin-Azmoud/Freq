@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ncurses.h>
+#include <assert.h>
 
 #define SPACE ' '
 WINDOW *init_ncurses();
@@ -92,13 +93,13 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
 
 	if (leftSamples > 0)
 	{
-		ma_decoder_read_pcm_frames(&audio->decoder, pOutput, samples_to_process , NULL);
-		float* pOutputF32 = (float*)pOutput;
+		// ma_decoder_read_pcm_frames(&audio->decoder, pOutput, samples_to_process , NULL);
+		float* out = (float*)pOutput;
+		for (int k = 0; k < samples_to_process * channels; ++k)
+			out[k] = *((audio->samples + audio->position) + k);
 
-		for (ma_uint64 i = 0; i < samples_to_process * pDevice->playback.channels; ++i) 
-        	pOutputF32[i] *= player->volume;
-		// TODO: Copy the samples to be visualized.
-		audio->position += samples_to_process;
+		// TODO: Copy the samples to be visualized,	
+		audio->position += samples_to_process * channels;
 	}
 
     (void)pInput; // Unused.
@@ -107,9 +108,9 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
 void *play_and_visualize_audio(void *audioPlayerData) 
 {
     MiAudioPlayer *player = (MiAudioPlayer *) audioPlayerData;
+	WINDOW *win = NULL;
 	ma_result result;
-    ma_decoder_config decoderConfig;
-	WINDOW *win = init_ncurses();
+    ma_decoder_config decoderConfig;	
 	decoderConfig = ma_decoder_config_init(ma_format_f32, 2, 48000); // Stereo, 48kHz
     result = ma_decoder_init_file(player->file, &decoderConfig,	&(player->audio.decoder));
     if (result != MA_SUCCESS) {
@@ -119,11 +120,20 @@ void *play_and_visualize_audio(void *audioPlayerData)
 
 	ma_decoder_get_length_in_pcm_frames(&player->audio.decoder, &(player->audio.totalFrames));
 
-	// Start the device
-	// player->audio.samples = (float *) malloc(sizeof(float) * player->audio.totalFrames * player->audio.decoder.outputChannels);
-	// memset(player->audio.samples, 0, sizeof(float) * player->audio.totalFrames * player->audio.decoder.outputChannels);
-	
+	// Load all the frames into the samples buffer.
+	player->audio.samples = (float *) malloc(sizeof(float) * (player->audio.totalFrames * player->audio.decoder.outputChannels + 1));
+	memset(player->audio.samples, 
+			0, sizeof(float) 
+			* (player->audio.totalFrames * player->audio.decoder.outputChannels + 1));
+	ma_uint64 read = 0;
+	ma_decoder_read_pcm_frames(&player->audio.decoder, 
+			player->audio.samples, 
+			player->audio.totalFrames,
+			&read
+			);
 
+	assert(read == player->audio.totalFrames);
+	win = init_ncurses();
 	// Initialize the device
     ma_device_config deviceConfig = ma_device_config_init(ma_device_type_playback);
     deviceConfig.playback.format   = player->audio.decoder.outputFormat;
@@ -157,11 +167,11 @@ void *play_and_visualize_audio(void *audioPlayerData)
 	{
 		Lockcurses();
 		mvprintw(0, 0, "Playing.");
-		mvprintw(1, 0, "Length -> %fs", player->audio.duration);
-		mvprintw(2, 0, "Cursor -> %fs", get_secs_repr(&player->audio.decoder, player->audio.position));
-		mvprintw(3, 0, "Chan -> %i", deviceConfig.playback.channels);
-		mvprintw(4, 0, "Rate -> %i", deviceConfig.sampleRate);
-		mvprintw(5, 0, "VOL-> %f", player->volume);
+		mvprintw(1, 0, "Length %fs", player->audio.duration);
+		mvprintw(2, 0, "Cursor %fs", get_secs_repr(&player->audio.decoder, player->audio.position));
+		mvprintw(3, 0, "Chan   %i", deviceConfig.playback.channels);
+		mvprintw(4, 0, "Rate   %i", deviceConfig.sampleRate);
+		mvprintw(5, 0, "VOL	   %f [UP: w][DOWN: S]", player->volume);
 		
 		int current = (get_secs_repr(&player->audio.decoder, player->audio.position) / (player->audio.duration)) * bar;
 		for (int x = 0; (x < current); ++x)
@@ -169,7 +179,7 @@ void *play_and_visualize_audio(void *audioPlayerData)
 		
 		mvchgat(6, 0, current, A_NORMAL, 1, NULL);	
 		
-		mvprintw(7, 0, "frameCount -> %li", player->fcount);
+		// mvprintw(7, 0, "frameCount -> %li", player->fcount);
 		refresh();
 		unLockcurses();
 	}
