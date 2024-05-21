@@ -2,10 +2,14 @@
 #include "miniaudio.h"
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ncurses.h>
 #include <assert.h>
+#include <sys/wait.h>
 
+#include <complex.h>
+// const double PI = acos(-1);
 #define SPACE ' '
 WINDOW *init_ncurses();
 pthread_mutex_t ncurses_mutex;
@@ -13,18 +17,20 @@ pthread_mutex_t ncurses_mutex;
 typedef struct {
     ma_decoder decoder;
     ma_uint64  position = 0;
+    ma_uint64  srate = 0;
 	float 	   *samples;
     ma_uint64  totalFrames = 0;
 	double     duration = 0;
+	bool       ready = 0;
+	uint32_t framecount = 0;
 } MiAudio;
 
 typedef struct {
-	MiAudio audio;
-	char 	file[512];
-	float   volume = 0.5f;
-	uint8_t play = 0;
-	uint8_t quit = 0;
-	uint32_t  fcount = 0;
+	MiAudio  audio;
+	char 	 file[512];
+	float    volume = 0.5f;
+	uint8_t  play = 0;
+	uint8_t  quit = 0;
 } MiAudioPlayer;
 
 // A function that returns a frame in seconds.
@@ -48,10 +54,16 @@ void *audio_player_get_input(void *player_data)
 {
 	MiAudioPlayer *player = (MiAudioPlayer *) player_data;
 	int c = 0;
-	while (1 && !(player->quit))
+	ma_uint64 sr;
+	ma_uint64 factor_to_move;
+	while (!(player->quit))
 	{
-		Lockcurses();
+
 		c = getchar();
+		Lockcurses();
+		sr = player->audio.srate;
+		factor_to_move = (5 * sr);
+
 		switch(c) {
 		case 'q': {
 			player->quit = 1;
@@ -69,12 +81,38 @@ void *audio_player_get_input(void *player_data)
 			}
 		} break;
 		case SPACE: {
-			player->play = !player->play;
+			if (player->play)
+				player->play = 0;
+			else
+				player->play = 1;
 		} break;
-		}
+		case 'a': { // sub cursor pos
+
+			if ((int64_t)player->audio.position - (int64_t)factor_to_move < 0) {
+				factor_to_move = player->audio.position; 
+			}
+
+			if (player->audio.position > 0) {
+				player->audio.position = (player->audio.position - factor_to_move); // Basically rewind 5 seconds
+			}
+		} break;
+		case 'd': { // add to cursor pos
+			if (player->audio.position + factor_to_move >=  player->audio.totalFrames) {
+				factor_to_move = player->audio.totalFrames - player->audio.position;
+			}
+			if (player->audio.position < player->audio.totalFrames) {
+				player->audio.position = (player->audio.position + factor_to_move); // Basically seek to 5 seconds after;
+			}
+		} break;
+		case 'r': { // rezero.
+			player->audio.position = 0; // Replay.
+		} break;
+		case 'g': {
+			player->audio.position = factor_to_move * 5; // Replay.
+		} break;
+		}	
 		unLockcurses();
 	}
-
 	return NULL;
 }
 
@@ -82,32 +120,35 @@ void *audio_player_get_input(void *player_data)
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
 {
 	// ma_decoder_read_pcm_frames(&audio->decoder, pOutput, framesToRead, NULL);
+	Lockcurses();
 	MiAudioPlayer *player = (MiAudioPlayer *) pDevice->pUserData;
     MiAudio *audio = &player->audio; 
 	ma_uint32 channels = pDevice->playback.channels;
-	if (audio == NULL || !(player->play) || player->quit) 
+	if (audio == NULL || player->quit) 
         return;
 	
 	ma_uint32 leftSamples = (audio->totalFrames - audio->position);
 	ma_uint32 samples_to_process = ((frameCount > leftSamples) ? leftSamples : frameCount);
-
-	if (leftSamples > 0)
+	audio->framecount = samples_to_process;
+	
+	if (leftSamples > 0 && player->play)
 	{
-		// ma_decoder_read_pcm_frames(&audio->decoder, pOutput, samples_to_process , NULL);
 		float* out = (float*)pOutput;
 		for (int k = 0; k < samples_to_process * channels; ++k)
-			out[k] = *((audio->samples + audio->position) + k);
+			out[k] = *((audio->samples + audio->position) + k) * player->volume;
 
 		// TODO: Copy the samples to be visualized,	
 		audio->position += samples_to_process * channels;
 	}
 
     (void)pInput; // Unused.
+	unLockcurses();
 }
 
 void *play_and_visualize_audio(void *audioPlayerData) 
 {
-    MiAudioPlayer *player = (MiAudioPlayer *) audioPlayerData;
+    Lockcurses();
+	MiAudioPlayer *player = (MiAudioPlayer *) audioPlayerData;
 	WINDOW *win = NULL;
 	ma_result result;
     ma_decoder_config decoderConfig;	
@@ -139,6 +180,7 @@ void *play_and_visualize_audio(void *audioPlayerData)
     deviceConfig.playback.format   = player->audio.decoder.outputFormat;
     deviceConfig.playback.channels = player->audio.decoder.outputChannels;
     deviceConfig.sampleRate        = player->audio.decoder.outputSampleRate;
+	
     deviceConfig.dataCallback      = data_callback;
     deviceConfig.pUserData         = player;
 
@@ -162,26 +204,41 @@ void *play_and_visualize_audio(void *audioPlayerData)
 	player->audio.duration = get_secs_repr(&player->audio.decoder, player->audio.totalFrames);
 	int bar = 100;
 	curs_set(0);
-
+	int h, w;
+	getmaxyx(win, h, w);
+	player->audio.srate = deviceConfig.sampleRate;
+	unLockcurses(); // Everythin is ready
 	while (player->audio.totalFrames - player->audio.position > 0 && !(player->quit))
 	{
-		Lockcurses();
+		
+		erase();
 		mvprintw(0, 0, "Playing.");
 		mvprintw(1, 0, "Length %fs", player->audio.duration);
 		mvprintw(2, 0, "Cursor %fs", get_secs_repr(&player->audio.decoder, player->audio.position));
 		mvprintw(3, 0, "Chan   %i", deviceConfig.playback.channels);
 		mvprintw(4, 0, "Rate   %i", deviceConfig.sampleRate);
 		mvprintw(5, 0, "VOL	   %f [UP: w][DOWN: S]", player->volume);
-		
+	
 		int current = (get_secs_repr(&player->audio.decoder, player->audio.position) / (player->audio.duration)) * bar;
 		for (int x = 0; (x < current); ++x)
 			mvaddch(6, x, ' ');
+		mvchgat(6, 0, current, A_NORMAL, 1, NULL);
+
+		// render the possible freqs
+		int N = player->audio.framecount;
 		
-		mvchgat(6, 0, current, A_NORMAL, 1, NULL);	
-		
-		// mvprintw(7, 0, "frameCount -> %li", player->fcount);
+		if (N > h)
+			N = h;
+
+		for (int k = 0, y = 1; k < (N * (player->audio.decoder.outputChannels)); k += 2, y++) {
+			float t = *((player->audio.samples + player->audio.position) + k) * 100;
+			if (t < 0) t = -t;
+			for (int x = 0; (x < t); ++x)
+				mvaddch(6 + y + 1, x, ' ');
+			mvchgat(6 + y + 1, 0, t, A_NORMAL, 1, NULL);
+		}
 		refresh();
-		unLockcurses();
+		
 	}
 
     ma_device_uninit(&device);
@@ -220,7 +277,6 @@ int main(int argc, char **argv)
 	pthread_mutex_destroy(&ncurses_mutex);
 	return 0;
 }
-
 
 WINDOW *init_ncurses() 
 {
