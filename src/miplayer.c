@@ -1,6 +1,7 @@
 #include <miplayer.h>
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio/miniaudio.h>
+
 pthread_mutex_t Mutx;
 void DistroyPlayerMutex()
 {
@@ -53,8 +54,6 @@ MiAudioPlayer *init_player(char *file)
 	player->volume = 1.0f;
 	player->play   = 0;
  	player->quit   = 0;
-	
-	
     ma_decoder_config decoderConfig;	
 	decoderConfig = ma_decoder_config_init(ma_format_f32, 2, 48000); // Stereo, 48kHz
     result = ma_decoder_init_file(player->file, &decoderConfig,	&(audio->decoder));
@@ -130,7 +129,7 @@ void player_pause(MiAudioPlayer *player)
 void toggle_play(MiAudioPlayer *player)
 {
 	if (player->play) {
-	   player_pause(player);
+	   	player_pause(player);
 		return;
 	}
 	player_play(player);
@@ -199,7 +198,6 @@ void *player_get_input(void *player_data)
 			rewind_audio(player);
 		} break;
 		}
-
 		unLockPlayer();
 	}
 	return NULL;
@@ -229,6 +227,7 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
 	ma_uint32 samples_to_process = ((frameCount > leftSamples) ? leftSamples : frameCount);
 	audio->framecount = samples_to_process;
 	LockPlayer();
+
 	if (leftSamples > 0 && player->play)
 	{
 		float* out = (float*)pOutput;
@@ -249,42 +248,58 @@ void *player_visualize_audio(void *audioPlayerData)
 	LockPlayer();
 	MiAudioPlayer *player = (MiAudioPlayer *) audioPlayerData;	
 	MiAudio       *audio  = &player->audio;
-	printf("DEAD lock\n");
 	int h, w;
 	int bar = 100; // 100% i meant
 	WINDOW *win = init_ncurses();
 	getmaxyx(win, h, w);
 	player->play = 1;
 	unLockPlayer();
+	curs_set(0);
 	while (player->audio.totalFrames - player->audio.position > 0 && !(player->quit))
 	{	
 		erase();
-		mvprintw(0, 0, "Playing.");
-		mvprintw(1, 0, "Length %fs", player->audio.duration);
-		mvprintw(2, 0, "Cursor %fs", get_frames_as_seconds(&player->audio.decoder, player->audio.position));
-		mvprintw(3, 0, "Chan   %i",  player->audio.decoder.outputChannels);
-		mvprintw(4, 0, "Rate   %i",  player->audio.decoder.outputSampleRate);
-		mvprintw(5, 0, "VOL	   %f [UP: w][DOWN: S]", player->volume);
+
+		mvprintw(0, 0, "Playing %s", player->file);
+		mvprintw(1, 0, "Length  %fs", player->audio.duration);
+		mvprintw(2, 0, "Cursor  %fs", get_frames_as_seconds(&player->audio.decoder, player->audio.position));
+		mvprintw(3, 0, "Chan    %i",  player->audio.decoder.outputChannels);
+		mvprintw(4, 0, "Rate    %i",  player->audio.decoder.outputSampleRate);
+		mvprintw(5, 0, "VOL	    %f [UP: w][DOWN: S]", player->volume);
 		int current = 
 			(get_frames_as_seconds(&player->audio.decoder, player->audio.position) / (player->audio.duration)) * bar;
 		
 		for (int x = 0; (x < current); ++x)
 			mvaddch(6, x, ' ');
 		mvchgat(6, 0, current, A_NORMAL, 1, NULL);
-
+		
+		int viw = 80;
+		int vih = 50;
+		
 		// render the possible freqs
 		int N = player->audio.framecount;
 		
-		if (N > h)
-			N = h;
+		if (N > viw - 2)
+			N = viw - 2;
 
 		float t1 = 0;
-		float t2 = 0;
-	
+
+		for (int k = 0, x = (w/2-viw/2); k < (N * (player->audio.decoder.outputChannels)); k += 2, x++) {
+			// The value of the sample.
+			t1 = *((player->audio.samples + player->audio.position) + k) * vih;
+			if (t1 < 0) t1 = -t1;
+
+			for (int y = (h/2+vih/2); (y > (h/2+vih/2) - t1); --y) {
+				mvaddch(y, x, ' ');
+				// mvaddch(6 + y + 1, x, ' ');	
+				mvchgat(y, x, 1, A_NORMAL, 1, NULL);
+			}
+		}
+/*
 		for (int k = 0, y = 1; k < (N * (player->audio.decoder.outputChannels)); k += 2, y++) {
 			t1 = *((player->audio.samples + player->audio.position) + k) * 100;
 			if (t1 < 0) t1 = -t1;
 			if (t1 > t2) {
+
 				for (int x = t2; (x < t1); ++x) {
 					mvaddch(6 + y + 1, x, ' ');	
 				}
@@ -295,11 +310,11 @@ void *player_visualize_audio(void *audioPlayerData)
 				}
 				mvchgat(6 + y + 1, 0, t1, A_NORMAL, 1, NULL);
 			}
-
 			t2 = t1;
 		}
-
+*/
 		refresh();
 	}
 	return NULL;
 }
+
